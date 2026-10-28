@@ -160,6 +160,16 @@ button.ctr:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 .hist span{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:2px 6px}
 .hist span.cur{border-color:var(--accent);color:var(--fg)}
 .hist i{font-style:normal}
+.mlist{display:flex;flex-direction:column}
+.mrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;align-items:baseline;padding:9px 2px;border:0;border-bottom:1px solid var(--line);background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;width:100%}
+.mrow:last-child{border-bottom:0}
+.mrow:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+.mrow .mn{font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mrow .ma{white-space:nowrap}.mrow .ma small{color:var(--muted);font-family:var(--f-body);font-size:.72rem;margin-left:2px}
+.mrow .mtrack{grid-column:1/-1;height:6px;border-radius:3px;background:var(--sunk);overflow:hidden}
+.mrow .mtrack i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.mrow .mm{grid-column:1/-1;font-size:.76rem;color:var(--muted)}
+.brow .tops{grid-column:1/-1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .backbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .backbar .ttl{flex:1 1 160px;min-width:0;font-family:var(--f-display);font-weight:600;font-size:1.08rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .backbtn{font:inherit;font-weight:600;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:999px;padding:7px 14px 7px 10px;min-height:38px;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
@@ -428,24 +438,47 @@ function detectRecurring(tx, cfgAll){
   for(const x of series){ if(x.gone) continue; const r=analyzeSeries(x.key, x.items, cfgAll[x.key], lastDataDate); if(r){ r.merged=x.merged||[]; res.push(r);} }
   return res.sort((a,b)=>b.monthly-a.monthly || b.latest-a.latest);
 }
+// Bekannte Händler und Marken: Filialnamen wie „ALDI SUED 123 Delbrueck“ werden zu „Aldi“
+const BRANDS = [
+ ['lidl','Lidl'],['aldi','Aldi'],['rewe','REWE'],['edeka','Edeka'],['kaufland','Kaufland'],['netto','Netto'],['penny','Penny'],['norma','Norma'],['marktkauf','Marktkauf'],['famila','Famila'],['globus baumarkt','Globus Baumarkt'],['globus','Globus'],['combi','Combi'],['tegut','tegut'],['denns','denns BioMarkt'],['alnatura','Alnatura'],['hit markt','HIT'],
+ ['rossmann','Rossmann'],['dm-drogerie','dm'],['dm drogerie','dm'],['dm fil','dm'],['dm','dm'],['mueller','Müller'],['budni','Budni'],
+ ['action','Action'],['tedi','TEDi'],['woolworth','Woolworth'],['thomas philipps','Thomas Philipps'],['kik','KiK'],['takko','Takko'],['ernsting','Ernsting’s family'],['primark','Primark'],['h&m','H&M'],['h+m','H&M'],['c&a','C&A'],['deichmann','Deichmann'],['zalando','Zalando'],['about you','About You'],['tk maxx','TK Maxx'],['zara','Zara'],['vinted','Vinted'],['bonprix','bonprix'],['snipes','Snipes'],
+ ['ikea','IKEA'],['obi','OBI'],['bauhaus','Bauhaus'],['hornbach','Hornbach'],['toom','toom'],['hagebau','hagebau'],['poco','POCO'],['jysk','JYSK'],['dehner','Dehner'],['fressnapf','Fressnapf'],['das futterhaus','Futterhaus'],['mediamarkt','MediaMarkt'],['media markt','MediaMarkt'],['saturn','Saturn'],['expert','expert'],['euronics','Euronics'],['cyberport','Cyberport'],
+ ['amazon','Amazon'],['amzn','Amazon'],['paypal','PayPal'],['ebay','eBay'],['temu','Temu'],['shein','SHEIN'],['otto','OTTO'],['klarna','Klarna'],['aliexpress','AliExpress'],['etsy','Etsy'],
+ ['aral','Aral'],['shell','Shell'],['esso','Esso'],['jet','JET'],['totalenergies','TotalEnergies'],['westfalen','Westfalen'],['star tank','star'],['avia','AVIA'],['agip','Agip'],['raiffeisen','Raiffeisen'],['adac','ADAC'],['deutsche bahn','Deutsche Bahn'],['db vertrieb','Deutsche Bahn'],['flixbus','FlixBus'],
+ ['mcdonald','McDonald’s'],['burger king','Burger King'],['kfc','KFC'],['subway','Subway'],['starbucks','Starbucks'],['lieferando','Lieferando'],['wolt','Wolt'],['uber eats','Uber Eats'],
+ ['netflix','Netflix'],['spotify','Spotify'],['disney','Disney+'],['dazn','DAZN'],['audible','Audible'],['apple','Apple'],['google','Google'],['microsoft','Microsoft'],['telekom','Telekom'],['vodafone','Vodafone'],['telefonica','O2'],['o2','O2'],['congstar','congstar'],['1&1','1&1'],['1und1','1&1'],['fitx','FitX'],['mcfit','McFit'],
+ ['smyths','Smyths Toys'],['mytoys','myToys'],['babyone','BabyOne'],['baby one','BabyOne'],['rofu','ROFU'],['fielmann','Fielmann'],['apollo','Apollo-Optik'],['docmorris','DocMorris'],['shop-apotheke','Shop Apotheke'],['apotheke','Apotheke'],
+ ['baeckerei','Bäckerei'],['backhaus','Bäckerei'],['baecker','Bäckerei'],['metzgerei','Metzgerei'],['fleischerei','Metzgerei'],['geldautomat','Geldautomat'],['huk','HUK-Coburg'],['allianz','Allianz'],['provinzial','Provinzial'],['ergo','ERGO'],['axa','AXA'],['devk','DEVK'],['lvm','LVM'],
+];
+function titleCase(s){ return s.replace(/\b([a-zäöü])/g,c=>c.toUpperCase()); }
+// liefert {key, name}: bekannte Marke oder bereinigter Empfängername
+function merchantOf(t){
+  const pn=norm(t.payee);
+  for(const [kw,name] of BRANDS){ if(kwHit(pn,kw)) return {key:'b:'+name, name}; }
+  const pu=norm(t.purpose);
+  for(const [kw,name] of BRANDS){ if(kw.length>=5 && kwHit(pu,kw)) return {key:'b:'+name, name}; }
+  const k = payeeKey(t).split(' ').slice(0,3).join(' ');
+  return {key:'p:'+k, name: titleCase(k||'unbekannt')};
+}
 /*PURE-END*/
 
 /* ---------- Zustand & Speicher ---------- */
 const KEY='haushaltskompass_v1';
 const uid = ()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
 let S = load();
-let view = 'uebersicht', period = 'all', search='', catFilter='', toastT=null, fromView=null;
+let view = 'uebersicht', period = 'all', search='', catFilter='', merchFilter='', toastT=null, fromView=null;
 const VIEW_NAMES={uebersicht:'Übersicht',buchungen:'Buchungen',analyse:'Analyse',vertraege:'Verträge',mehr:'Mehr'};
 /* Jede Ansicht ist ein Eintrag im Browser-Verlauf: der Zurück-Button in der App und die Zurück-Taste des Handys springen zur vorherigen Ansicht */
-function navState(){ return {nav:1, view, catFilter, ids:window.__ids||null, period, search, fromView, y:window.scrollY}; }
-function applyState(st){ view=st.view||'uebersicht'; catFilter=st.catFilter||''; window.__ids=st.ids||null; period=st.period||'all'; search=st.search||''; fromView=st.fromView||null; }
+function navState(){ return {nav:1, view, catFilter, merchFilter, ids:window.__ids||null, period, search, fromView, y:window.scrollY}; }
+function applyState(st){ view=st.view||'uebersicht'; catFilter=st.catFilter||''; merchFilter=st.merchFilter||''; window.__ids=st.ids||null; period=st.period||'all'; search=st.search||''; fromView=st.fromView||null; }
 function go(changes){
   try{ history.replaceState(navState(),''); }catch(e){}
-  applyState(Object.assign(navState(), {catFilter:'', ids:null, search:'', fromView:null}, changes));
+  applyState(Object.assign(navState(), {catFilter:'', merchFilter:'', ids:null, search:'', fromView:null}, changes));
   try{ history.pushState(navState(),''); }catch(e){}
   render(); window.scrollTo(0,0);
 }
-function goBack(){ if(history.state && history.state.nav && history.length>1 && fromView){ history.back(); } else { go({view: fromView||'uebersicht'}); } }
+function goBack(){ if(history.state && history.state.nav && history.length>1 && (fromView||merchFilter)){ history.back(); } else { go({view: fromView||'uebersicht'}); } }
 let ignorePop=false, afterPop=null;
 window.addEventListener('popstate', e=>{
   if(ignorePop){ ignorePop=false; const f=afterPop; afterPop=null; f&&f(); return; }
@@ -453,7 +486,13 @@ window.addEventListener('popstate', e=>{
   const st=e.state; if(!st || !st.nav){ applyState({}); render(); return; }
   applyState(st); render(); requestAnimationFrame(()=>window.scrollTo(0, st.y||0));
 });
-function defaultState(){ return {tx:[], rules:[], bench:{}, adults:2, kids:2, sample:false, dismissed:[], contracts:{}}; }
+function defaultState(){ return {tx:[], rules:[], bench:{}, adults:2, kids:2, sample:false, dismissed:[], contracts:{}, malias:{}}; }
+function merchant(t){ const m=merchantOf(t); const al=(S.malias||{})[m.key]; return al ? {key:m.key, name:al, orig:m.name} : m; }
+function merchantBreakdown(tx, n){
+  const g={}; for(const t of tx){ if(t.amount>=0) continue; const m=merchant(t); const x=(g[m.name]=g[m.name]||{name:m.name, keys:new Set(), sum:0, cnt:0}); x.keys.add(m.key); x.sum-=t.amount; x.cnt++; }
+  const list=Object.values(g).sort((a,b)=>b.sum-a.sum); const tot=list.reduce((s,x)=>s+x.sum,0)||1;
+  list.forEach(x=>{ x.share=x.sum/tot; x.avgMonth=x.sum/Math.max(1,n); x.avgTx=x.sum/x.cnt; }); return list;
+}
 function contracts(){ if(!S.contracts) S.contracts={}; return detectRecurring(S.tx, S.contracts); }
 function load(){
   try{ const raw = localStorage.getItem(KEY); if(raw){ const d=JSON.parse(raw); return Object.assign(defaultState(), d); } }catch(e){}
@@ -668,7 +707,9 @@ function benchRows(st, limit){
     else if(r.avg<r.b[0]*0.9 && r.b[0]>0){ pill='<span class="pill good">günstig</span>'; cls='under'; }
     else pill='<span class="pill neutral">normal</span>';
     const band = r.b ? `<div class="bandz" style="left:${r.b[0]/scale*100}%;width:${Math.max(0.5,(r.b[1]-r.b[0])/scale*100)}%"></div>` : '';
-    return `<button class="brow" type="button" data-cat="${r.c.id}" aria-label="${esc(r.c.name)} anzeigen"><span class="nm">${esc(r.c.name)} ${pill}</span><span class="amt num">${eur0(r.avg)}</span><span class="track">${band}<span class="bar ${cls}" style="width:${Math.min(100,r.avg/scale*100)}%"></span></span>${r.b?`<span class="small muted" style="grid-column:1/-1">Richtwert ${eur0(r.b[0])}–${eur0(r.b[1])}</span>`:''}</button>`;
+    const tops = merchantBreakdown(st.tx.filter(t=>t.cat===r.c.id), st.n).slice(0,3);
+    const topTxt = limit==null && tops.length>1 ? `<span class="small muted tops">${tops.map(x=>`${esc(x.name)} ${eur0(x.avgMonth)}`).join(' · ')}</span>` : '';
+    return `<button class="brow" type="button" data-cat="${r.c.id}" aria-label="${esc(r.c.name)} anzeigen"><span class="nm">${esc(r.c.name)} ${pill}</span><span class="amt num">${eur0(r.avg)}</span><span class="track">${band}<span class="bar ${cls}" style="width:${Math.min(100,r.avg/scale*100)}%"></span></span>${topTxt}${r.b?`<span class="small muted" style="grid-column:1/-1">Richtwert ${eur0(r.b[0])}–${eur0(r.b[1])}</span>`:''}</button>`;
   }).join('')}</div>`;
 }
 function alertList(A, limit){
@@ -684,9 +725,39 @@ function vUebersicht(){
   <section class="card"><div class="sec-h"><h2>Auffälligkeiten</h2>${A.length?`<button class="link" type="button" data-view-go="analyse">Alle ${A.length} ansehen</button>`:''}</div>${pot>1?`<p class="small" style="margin:-4px 0 12px">Gesamtes Sparpotenzial laut Analyse: <b class="num">${eur0(pot)} pro Jahr</b></p>`:''}${alertList(A,3)}</section>
   <section class="card"><div class="sec-h"><h2>Größte Ausgaben</h2><button class="link" type="button" data-view-go="analyse">Mit Richtwerten vergleichen</button></div>${benchRows(st,6)}</section>`;
 }
+function mRows(list, opts){
+  opts=opts||{}; const max=Math.max(...list.map(x=>x.sum),1);
+  return `<div class="mlist">${list.map(x=>`<button class="mrow" type="button" data-merch="${esc(x.name)}"${opts.cat?` data-mcat="${opts.cat}"`:''}><span class="mn">${esc(x.name)}</span><span class="ma num">${eur0(x.avgMonth)}<small>/Monat</small></span><span class="mtrack"><i style="width:${x.sum/max*100}%"></i></span><span class="mm">${x.cnt}× · Ø ${eur(x.avgTx)} pro Einkauf · ${Math.round(x.share*100)} %</span></button>`).join('')}</div>`;
+}
+function subCard(tx, n){
+  const list=merchantBreakdown(tx, n); if(list.length<2) return '';
+  const top=list.slice(0,12), rest=list.slice(12);
+  if(rest.length){ const r={name:`${rest.length} weitere`, sum:rest.reduce((s,x)=>s+x.sum,0), cnt:rest.reduce((s,x)=>s+x.cnt,0)}; r.avgMonth=r.sum/Math.max(1,n); r.avgTx=r.sum/r.cnt; r.share=rest.reduce((s,x)=>s+x.share,0); r.more=true; top.push(r); }
+  return `<section class="card"><div class="sec-h"><h2>Unterkategorien</h2><span class="small muted">nach Händler · Ø pro Monat</span></div>${mRows(top.filter(x=>!x.more))}${rest.length?`<p class="small muted" style="margin:8px 0 0">${rest.length} weitere Händler mit zusammen ${eur0(top[top.length-1].avgMonth)} pro Monat.</p>`:''}</section>`;
+}
+function merchInfo(tx, n){
+  const out=tx.filter(t=>t.amount<0); if(!out.length) return '';
+  const sum=out.reduce((s,t)=>s-t.amount,0); const months=new Set(out.map(t=>t.date.slice(0,7))).size;
+  return `<section class="card"><div class="kpis" style="grid-template-columns:repeat(3,minmax(0,1fr))"><div class="kpi" style="padding:0"><div class="lbl">Ø pro Monat</div><div class="val num">${eur0(sum/Math.max(1,n))}</div></div><div class="kpi" style="padding:0"><div class="lbl">Einkäufe</div><div class="val num">${out.length}</div><div class="hint">in ${months} Monat${months>1?'en':''}</div></div><div class="kpi" style="padding:0"><div class="lbl">Ø Einkauf</div><div class="val num">${eur(sum/out.length)}</div></div></div></section>`;
+}
+function renameMerchant(name){
+  const keys=new Set(S.tx.filter(t=>merchant(t).name===name).map(t=>merchant(t).key));
+  const names=[...new Set(S.tx.filter(t=>t.amount<0).map(t=>merchant(t).name))].filter(x=>x!==name).sort((a,b)=>a.localeCompare(b,'de'));
+  openSheet(`<h2>Händler umbenennen</h2><p class="small muted" style="margin:0">Gib einen anderen Namen ein. Wählst du einen bestehenden Namen, werden beide Händler zusammengefasst – praktisch, wenn ein Laden unter verschiedenen Namen abbucht.</p>
+    <label class="f">Name<input id="mName" value="${esc(name)}" list="mNames" autocomplete="off"></label><datalist id="mNames">${names.map(x=>`<option value="${esc(x)}">`).join('')}</datalist>
+    <div class="actions">${[...keys].some(k=>S.malias&&S.malias[k])?`<button class="btn soft" type="button" id="mReset">Original-Namen</button>`:'<span></span>'}<span style="display:flex;gap:8px"><button class="btn soft" type="button" id="mCancel">Abbrechen</button><button class="btn" type="button" id="mSave">Speichern</button></span></div>`, el=>{
+      el.querySelector('#mCancel').onclick=()=>closeSheet();
+      const rs=el.querySelector('#mReset'); if(rs) rs.onclick=()=>{ keys.forEach(k=>delete S.malias[k]); save(); closeSheet(()=>{ merchFilter=''; try{history.replaceState(navState(),'');}catch(e){} render(); }); };
+      el.querySelector('#mSave').onclick=()=>{ const nv=el.querySelector('#mName').value.trim(); if(!nv){ toast('Bitte einen Namen eingeben.'); return; }
+        S.malias=S.malias||{}; keys.forEach(k=>S.malias[k]=nv); save();
+        closeSheet(()=>{ merchFilter=nv; try{history.replaceState(navState(),'');}catch(e){} render(); toast(names.includes(nv)?`Zusammengefasst unter „${nv}“`:'Umbenannt'); }); };
+    });
+}
 function vBuchungen(){
   const ms=periodMonths(); let tx=txIn(ms);
   if(catFilter) tx = tx.filter(t=>t.cat===catFilter);
+  const catTx = tx;
+  if(merchFilter) tx = tx.filter(t=>merchant(t).name===merchFilter);
   if(window.__ids){ const set=new Set(window.__ids); tx = S.tx.filter(t=>set.has(t.id)); }
   if(search){ const q=norm(search); tx=tx.filter(t=>norm(t.payee+' '+t.purpose+' '+(t.note||'')+' '+CAT[t.cat]?.name).includes(q) || String(Math.abs(t.amount)).includes(q.replace(',','.'))); }
   tx.sort((a,b)=>b.date.localeCompare(a.date) || a.amount-b.amount);
@@ -698,9 +769,11 @@ function vBuchungen(){
     const c=CAT[t.cat]||CAT.sonstiges;
     body+=`<button class="row" type="button" data-edit="${t.id}"><span class="ic" style="background:${c.color}">${initials(c.id)}</span><span class="t"><span class="p">${esc(t.payee||t.purpose||'Ohne Bezeichnung')}</span><span class="s">${esc(c.name)}${t.manual?' · manuell':''}${t.purpose&&t.payee?' · '+esc(t.purpose):''}</span></span><span class="a num ${t.amount>0?'pos':''}">${t.amount>0?'+':''}${eur(t.amount)}</span></button>`;
   }
-  const drill = catFilter ? (CAT[catFilter]?.name||'Rubrik') : (window.__ids ? 'Buchungen zur Auffälligkeit' : '');
-  const backbar = (drill || fromView) ? `<div class="backbar"><button class="backbtn" type="button" data-act="back" aria-label="Zurück">‹ ${esc(VIEW_NAMES[fromView]||'Zurück')}</button><span class="ttl">${esc(drill||'Alle Buchungen')}</span>${drill?`<button class="link small" type="button" data-act="allTx">Alle Buchungen</button>`:''}</div>` : '';
-  return `${backbar}<section class="card"><div class="toolbar"><input type="search" id="q" placeholder="Suchen: Händler, Zweck, Betrag" value="${esc(search)}" aria-label="Buchungen durchsuchen"><select id="catSel" aria-label="Nach Rubrik filtern">${opts}</select></div>
+  const drill = merchFilter ? merchFilter : catFilter ? (CAT[catFilter]?.name||'Rubrik') : (window.__ids ? 'Buchungen zur Auffälligkeit' : '');
+  const sub = (catFilter && !merchFilter && !window.__ids) ? subCard(catTx, ms.length) : '';
+  const mInfo = merchFilter ? merchInfo(tx, ms.length) : '';
+  const backbar = (drill || fromView) ? `<div class="backbar"><button class="backbtn" type="button" data-act="back" aria-label="Zurück">‹ ${esc(VIEW_NAMES[fromView]||'Zurück')}</button><span class="ttl">${esc(drill||'Alle Buchungen')}</span>${merchFilter?`<button class="link small" type="button" data-act="renameM">Umbenennen</button>`:''}${drill?`<button class="link small" type="button" data-act="allTx">Alle Buchungen</button>`:''}</div>` : '';
+  return `${backbar}${sub}${mInfo}<section class="card"><div class="toolbar"><input type="search" id="q" placeholder="Suchen: Händler, Zweck, Betrag" value="${esc(search)}" aria-label="Buchungen durchsuchen"><select id="catSel" aria-label="Nach Rubrik filtern">${opts}</select></div>
   <div class="sumline small" style="margin-top:12px"><span>${tx.length} Buchungen</span><span class="num">Summe ${eur(sum)}</span></div>
   <div class="list">${body || '<div class="empty">Keine Buchungen gefunden.</div>'}</div></section>`;
 }
@@ -720,7 +793,8 @@ function vAnalyse(){
   <section class="card"><div class="sec-h"><h2>Auffälligkeiten & Kostenfallen</h2><span class="small muted">${A.length} gefunden</span></div>${alertList(A)}</section>
   <section class="card"><div class="sec-h"><h2>Rubriken im Vergleich</h2><span class="small muted">Ø pro Monat</span></div>
     <p class="small muted" style="margin:-4px 0 14px">Das grüne Band zeigt den üblichen Bereich für einen Haushalt eurer Größe. Grundlage sind die Konsumausgaben von Paaren mit Kindern laut Statistischem Bundesamt, auf heutige Preise hochgerechnet. Unter „Mehr“ kannst du die Werte anpassen.</p>
-    ${benchRows(st)}</section>`;
+    ${benchRows(st)}</section>
+  ${(()=>{ const fixIds=new Set(contracts().flatMap(r=>r.ids)); const L=merchantBreakdown(st.tx.filter(t=>!fixIds.has(t.id) && !CAT[t.cat]?.saving && !CAT[t.cat]?.transfer && !['wohnen','energie','versicherung','steuern','gebuehren','bargeld'].includes(t.cat)), st.n).slice(0,10); return L.length>1?`<section class="card"><div class="sec-h"><h2>Top-Händler</h2><span class="small muted">Einkäufe ohne feste Verträge · Ø pro Monat</span></div>${mRows(L)}</section>`:''; })()}`;
 }
 function segText(sg){ return `${eur(sg.amount)} · ${monthSpan(sg.from,sg.to)} (${sg.n}×)`; }
 function vVertraege(){
@@ -905,6 +979,7 @@ document.addEventListener('click', e=>{
   if(t.dataset.cat){ go({view:'buchungen', catFilter:t.dataset.cat, fromView:view}); return; }
   if(t.dataset.showids){ go({view:'buchungen', ids:t.dataset.showids.split(','), fromView:view}); return; }
   if(t.dataset.rv){ const k=t.dataset.rv; const r=contracts().find(x=>x.key===k); if(r){ S.contracts[k]=Object.assign({},S.contracts[k],{sig:r.sig, ended:!!t.dataset.end, amount: t.dataset.end? r.latest : +t.dataset.amt}); save(); render(); toast(t.dataset.end?`„${r.name}“ als beendet markiert`:`Gespeichert: ${eur(+t.dataset.amt)} gilt aktuell`);} return; }
+  if(t.dataset.merch!=null){ if(view==='buchungen'){ try{history.replaceState(navState(),'');}catch(e){} merchFilter=t.dataset.merch; try{history.pushState(navState(),'');}catch(e){} render(); window.scrollTo(0,0); } else go({view:'buchungen', merchFilter:t.dataset.merch, fromView:view}); return; }
   if(t.dataset.ctr){ contractSheet(t.dataset.ctr); return; }
   if(t.dataset.edit){ const tx=S.tx.find(x=>x.id===t.dataset.edit); tx && editSheet(tx); return; }
   if(t.dataset.dismiss){ S.dismissed.push(t.dataset.dismiss); save(); render(); toast('Hinweis ausgeblendet'); return; }
@@ -914,7 +989,8 @@ document.addEventListener('click', e=>{
   else if(act==='add') editSheet(null);
   else if(act==='clearSample'){ S.tx=S.tx.filter(x=>!x.sample); S.sample=false; save(); render(); toast('Beispieldaten entfernt'); }
   else if(act==='back') goBack();
-  else if(act==='allTx'){ catFilter=''; window.__ids=null; search=''; try{history.replaceState(navState(),'');}catch(e){} render(); }
+  else if(act==='renameM') renameMerchant(merchFilter);
+  else if(act==='allTx'){ catFilter=''; merchFilter=''; window.__ids=null; search=''; try{history.replaceState(navState(),'');}catch(e){} render(); }
   else if(act==='backup'){ try{ const b=new Blob([backupJSON()],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='haushaltskompass-sicherung-'+new Date().toISOString().slice(0,10)+'.json'; document.body.appendChild(a); a.click(); a.remove(); toast('Sicherung wird gespeichert. Klappt das nicht, nutze „Sicherung kopieren“.'); }catch(err){ toast('Download hier nicht möglich – nutze „Sicherung kopieren“.'); } }
   else if(act==='backupCopy'){ const txt=backupJSON(); navigator.clipboard?.writeText(txt).then(()=>toast('Sicherung in die Zwischenablage kopiert')).catch(()=>{ openSheet(`<h2>Sicherung</h2><p class="small muted">Text markieren und kopieren, z. B. in eine Notiz.</p><textarea readonly id="bk">${esc(txt)}</textarea><div class="actions"><span></span><button class="btn" type="button" onclick="closeSheet()">Fertig</button></div>`, el=>{ const ta=el.querySelector('#bk'); ta.focus(); ta.select(); }); }); }
   else if(act==='restore'){ openSheet(`<h2>Sicherung laden</h2><p class="small muted" style="margin:0">Ersetzt alle aktuellen Daten.</p><button class="btn" type="button" id="rFile">Datei auswählen</button><textarea id="rTxt" placeholder="Oder kopierten Sicherungstext einfügen"></textarea><div class="actions"><button class="btn soft" type="button" onclick="closeSheet()">Abbrechen</button><button class="btn" type="button" id="rGo">Text laden</button></div>`, el=>{ el.querySelector('#rFile').onclick=()=>document.getElementById('backupIn').click(); el.querySelector('#rGo').onclick=()=>restoreJSON(el.querySelector('#rTxt').value); }); }
@@ -927,7 +1003,7 @@ document.addEventListener('input', e=>{
 });
 document.addEventListener('change', e=>{
   const t=e.target;
-  if(t.id==='catSel'){ catFilter=t.value; window.__ids=null; try{history.replaceState(navState(),'');}catch(e){} render(); }
+  if(t.id==='catSel'){ catFilter=t.value; merchFilter=''; window.__ids=null; try{history.replaceState(navState(),'');}catch(e){} render(); }
   if(t.id==='adults'||t.id==='kids'){ S[t.id]=Math.max(t.id==='adults'?1:0, parseInt(t.value)||0); save(); toast('Haushaltsgröße gespeichert'); }
   if(t.dataset.bench){ const id=t.dataset.bench; const b=[...(S.bench[id]||CAT[id].bench)]; b[+t.dataset.i]=Math.max(0,+t.value||0); S.bench[id]=b; save(); }
 });
