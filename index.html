@@ -149,6 +149,17 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border
 table{border-collapse:collapse;font-size:.78rem;width:100%}
 th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
 th{background:var(--sunk);font-weight:600}
+button.ctr{width:100%;background:none;border-left:0;border-right:0;border-top:0;font:inherit;color:inherit;text-align:left;cursor:pointer}
+button.ctr .n{white-space:normal;overflow:visible}
+button.ctr:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+.rv{background:var(--bg);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.rv-h{display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap}
+.rv .q{margin:0;font-size:.9rem;font-weight:500}
+.rv-o{display:flex;gap:8px;flex-wrap:wrap}
+.hist{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;font-size:.8rem;color:var(--muted);font-family:var(--f-num);font-variant-numeric:tabular-nums}
+.hist span{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:2px 6px}
+.hist span.cur{border-color:var(--accent);color:var(--fg)}
+.hist i{font-style:normal}
 .backbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .backbar .ttl{flex:1 1 160px;min-width:0;font-family:var(--f-display);font-weight:600;font-size:1.08rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .backbtn{font:inherit;font-weight:600;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:999px;padding:7px 14px 7px 10px;min-height:38px;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
@@ -340,43 +351,82 @@ function txFingerprint(t){ return t.date+'|'+t.amount.toFixed(2)+'|'+norm(t.paye
 function median(a){ if(!a.length) return 0; const s=[...a].sort((x,y)=>x-y); const m=Math.floor(s.length/2); return s.length%2?s[m]:(s[m-1]+s[m])/2; }
 function daysBetween(a,b){ return Math.round((new Date(b)-new Date(a))/86400000); }
 
-function detectRecurring(tx){
+const MONTH_WORDS=/\b(januar|februar|maerz|april|mai|juni|juli|august|september|oktober|november|dezember|jan|feb|mrz|apr|jun|jul|aug|sep|sept|okt|nov|dez)\b/g;
+const PURPOSE_NOISE=/\b(lastschrift|folgelastschrift|erstlastschrift|basislastschrift|sepa|dauerauftrag|ueberweisung|gutschrift|kartenzahlung|abbuchung|zahlung|beitrag|beitraege|monatsbeitrag|monat|monatlich|rate|vom|bis|fuer|und|der|die|das|des|zum|zur|nr|kd|kunde|kundennr|vertragsnr|rechnung|rg|danke|ihr|ihre|referenz|datum|uhr)\b/g;
+// Kennung aus dem Verwendungszweck, damit z. B. „Sparplan Yeshua“ und „Sparplan Eliana“ beim selben Anbieter getrennt bleiben
+function purposeKey(t){
+  let p=norm(t.purpose);
+  p=p.replace(/\b(eref|mref|cred|kref|iban|bic|end-to-end-ref|mandatsref|mandat|glaeubiger-id|glaeubigerid|ci)\b\s*[:+.]?\s*\S*/g,' ').replace(/\b(svwz|abwa|abwe)\b\s*[:+]?/g,' ');
+  p=p.replace(/\S*\d\S*/g,' ').replace(MONTH_WORDS,' ').replace(/[^a-z& ]/g,' ').replace(PURPOSE_NOISE,' ').replace(/\s+/g,' ').trim();
+  return p.split(' ').filter(w=>w.length>1).slice(0,3).join(' ');
+}
+const ym = d => d.slice(0,7);
+function monthSpan(a,b){ const f=d=>['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'][+d.slice(5,7)-1]+' '+d.slice(2,4); return ym(a)===ym(b)?f(a):f(a)+' – '+f(b); }
+function analyzeSeries(key, items, cfg, lastDataDate){
+  items=[...items].sort((a,b)=>a.date.localeCompare(b.date));
+  if(items.length<2) return null;
+  const pm={}; items.forEach(t=>{pm[ym(t.date)]=(pm[ym(t.date)]||0)+1;});
+  const months=Object.keys(pm);
+  const cnt=Math.max(1,Math.round(median(Object.values(pm))));
+  const firsts=[]; const seenM=new Set(); items.forEach(t=>{ if(!seenM.has(ym(t.date))){ seenM.add(ym(t.date)); firsts.push(t);} });
+  const gaps=[]; for(let i=1;i<firsts.length;i++) gaps.push(daysBetween(firsts[i-1].date, firsts[i].date));
+  const g=median(gaps);
+  let freq=null, perF=1, expGap=31;
+  if(months.length>=3 && g>=20 && g<=40){ freq='monatlich'; }
+  else if(firsts.length>=2 && g>=80 && g<=100){ freq='vierteljährlich'; perF=1/3; expGap=92; }
+  else if(firsts.length>=2 && g>=170 && g<=200){ freq='halbjährlich'; perF=1/6; expGap=183; }
+  if(!freq) return null;
+  const amts=items.map(t=>Math.abs(t.amount));
+  let changes=0; for(let i=1;i<amts.length;i++) if(Math.abs(amts[i]-amts[i-1])>0.005) changes++;
+  if(cnt===1 && changes>Math.max(2,Math.floor(items.length/3))) return null; // schwankt ständig: Einkäufe, kein Vertrag
+  if(cnt>1 && new Set(amts.map(a=>a.toFixed(2))).size>2) return null;
+  // Betragsverlauf in Abschnitte gliedern (z. B. 50 € → 75 € → 60 €)
+  const segments=[];
+  if(cnt===1){ for(const t of items){ const a=Math.abs(t.amount); const sg=segments[segments.length-1]; if(sg && Math.abs(sg.amount-a)<=0.005){ sg.to=t.date; sg.n++; } else segments.push({amount:a, from:t.date, to:t.date, n:1}); } }
+  else segments.push({amount:Math.abs(items[items.length-1].amount), from:items[0].date, to:items[items.length-1].date, n:items.length});
+  // Verträge ändern ihren Betrag selten: jede Stufe muss im Schnitt mindestens zweimal gezahlt worden sein, höchstens eine Einzelzahlung
+  if(segments.length>1 && (segments.length*2 > items.length+1 || segments.filter(x=>x.n===1).length>1)) return null;
+  const latest=segments[segments.length-1].amount;
+  const lastPay=items[items.length-1].date;
+  const maybeEnded = lastDataDate && daysBetween(lastPay,lastDataDate) > expGap*1.6;
+  const changed = segments.length>1;
+  const sig = segments.map(x=>x.amount.toFixed(2)).join('>') + (maybeEnded?'|ende':'');
+  const confirmed = !!(cfg && cfg.sig===sig);
+  const current = confirmed && cfg.amount!=null ? cfg.amount : latest;
+  const ended = confirmed ? !!cfg.ended : false;
+  const monthly = ended ? 0 : current*cnt*perF;
+  const prev = changed ? segments[segments.length-2].amount : latest;
+  const sav = !!CAT[items[items.length-1].cat]?.saving;
+  const lt=items[items.length-1]; const pk=purposeKey(lt);
+  let name = lt.payee || lt.purpose || key;
+  if(pk && !norm(name).includes(pk)) name += ' · ' + pk.replace(/\b\w/g,c=>c.toUpperCase());
+  if(cnt>1) name += ` (${cnt}×)`;
+  if(cfg && cfg.name) name = cfg.name;
+  return {key, name, cat:lt.cat, freq, per:cnt, last:current, latest, first:prev, monthly, yearly:monthly*12, count:items.length, lastDate:lastPay,
+    increase: !sav && !confirmed && changed && latest>prev*1.03 && latest-prev>=0.5 ? latest-prev : 0,
+    ids:items.map(t=>t.id), segments, changed, maybeEnded, ended, confirmed, needsReview:(changed||maybeEnded)&&!confirmed, sig, saving:sav};
+}
+function detectRecurring(tx, cfgAll){
+  cfgAll=cfgAll||{};
+  const lastDataDate = tx.reduce((m,t)=>t.date>m?t.date:m,'');
   const groups = {};
-  for(const t of tx){ if(t.amount>=0 || CAT[t.cat]?.transfer) continue; const k=payeeKey(t); (groups[k]=groups[k]||[]).push(t); }
-  const res=[];
+  for(const t of tx){ if(t.amount>=0 || CAT[t.cat]?.transfer) continue; const k=payeeKey(t)+'|'+purposeKey(t); (groups[k]=groups[k]||[]).push(t); }
+  let series=[];
   for(const [k,list] of Object.entries(groups)){
     if(list.length<2) continue;
-    list.sort((a,b)=>a.date.localeCompare(b.date));
-    // In Untergruppen nach ähnlichem Betrag teilen (z. B. zwei Handyverträge beim selben Anbieter)
-    const clusters=[];
-    for(const t of list){
-      const a=Math.abs(t.amount);
-      let c = clusters.find(c=>Math.abs(a-c.ref)/c.ref<=0.2);
-      if(!c){ c={ref:a, items:[]}; clusters.push(c); }
-      c.items.push(t);
-    }
-    for(const c of clusters){
-      const items=c.items; const months=new Set(items.map(t=>t.date.slice(0,7)));
-      if(items.length<2) continue;
-      // Verträge haben feste Beträge: höchstens zwei verschiedene Beträge (z. B. vor/nach Preiserhöhung)
-      if(new Set(items.map(t=>Math.abs(t.amount).toFixed(2))).size>2) continue;
-      const gaps=[]; for(let i=1;i<items.length;i++) gaps.push(daysBetween(items[i-1].date, items[i].date));
-      const g=median(gaps);
-      let freq=null, per=1;
-      const perMonth={}; items.forEach(t=>{const m=t.date.slice(0,7); perMonth[m]=(perMonth[m]||0)+1;});
-      const cnt=median(Object.values(perMonth));
-      if(months.size>=3 && cnt>=2 && Number.isInteger(cnt)){ freq='monatlich'; per=cnt; }
-      else if(months.size>=3 && g>=20 && g<=40 && items.length<=months.size+1){ freq='monatlich'; per=1; }
-      else if(items.length>=2 && g>=80 && g<=100){ freq='vierteljährlich'; per=1/3; }
-      else if(items.length>=2 && g>=170 && g<=200){ freq='halbjährlich'; per=1/6; }
-      if(!freq) continue;
-      const first=Math.abs(items[0].amount), last=Math.abs(items[items.length-1].amount);
-      const monthly = last*per;
-      const name = (items[items.length-1].payee || items[items.length-1].purpose || k) + (per>1?` (${per}×)`:'');
-      res.push({key:k+'#'+Math.round(c.ref), name, cat:items[items.length-1].cat, freq, last, first, monthly, yearly:monthly*12, count:items.length, lastDate:items[items.length-1].date, increase: last>first*1.03 && last-first>=0.5 ? last-first : 0, ids:items.map(t=>t.id)});
-    }
+    const pm={}; list.forEach(t=>{pm[ym(t.date)]=(pm[ym(t.date)]||0)+1;});
+    if(median(Object.values(pm))>=2){
+      // mehrere Zahlungen pro Monat (z. B. zwei Handyverträge): nach Betrag trennen
+      const cl=[]; [...list].sort((a,b)=>a.date.localeCompare(b.date)).forEach(t=>{ const a=Math.abs(t.amount); let c=cl.find(c=>Math.abs(a-c.ref)/c.ref<=0.2); if(!c){c={ref:a,items:[]};cl.push(c);} c.items.push(t); });
+      cl.sort((a,b)=>b.ref-a.ref).forEach((c,i)=>series.push({key:cl.length>1?k+'#'+i:k, items:c.items}));
+    } else series.push({key:k, items:list});
   }
-  return res.sort((a,b)=>b.monthly-a.monthly);
+  // vom Nutzer zusammengeführte Verträge
+  const byKey=Object.fromEntries(series.map(x=>[x.key,x]));
+  for(const x of [...series]){ const tgt=cfgAll[x.key]?.mergeInto; if(tgt && byKey[tgt] && tgt!==x.key){ byKey[tgt].items=byKey[tgt].items.concat(x.items); (byKey[tgt].merged=byKey[tgt].merged||[]).push(x.key); x.gone=true; } }
+  const res=[];
+  for(const x of series){ if(x.gone) continue; const r=analyzeSeries(x.key, x.items, cfgAll[x.key], lastDataDate); if(r){ r.merged=x.merged||[]; res.push(r);} }
+  return res.sort((a,b)=>b.monthly-a.monthly || b.latest-a.latest);
 }
 /*PURE-END*/
 
@@ -403,7 +453,8 @@ window.addEventListener('popstate', e=>{
   const st=e.state; if(!st || !st.nav){ applyState({}); render(); return; }
   applyState(st); render(); requestAnimationFrame(()=>window.scrollTo(0, st.y||0));
 });
-function defaultState(){ return {tx:[], rules:[], bench:{}, adults:2, kids:2, sample:false, dismissed:[]}; }
+function defaultState(){ return {tx:[], rules:[], bench:{}, adults:2, kids:2, sample:false, dismissed:[], contracts:{}}; }
+function contracts(){ if(!S.contracts) S.contracts={}; return detectRecurring(S.tx, S.contracts); }
 function load(){
   try{ const raw = localStorage.getItem(KEY); if(raw){ const d=JSON.parse(raw); return Object.assign(defaultState(), d); } }catch(e){}
   const s = defaultState(); s.tx = sampleData(); s.sample = true; return s;
@@ -423,7 +474,9 @@ function sampleData(){
     const D=(d)=>`${y}-${String(m).padStart(2,'0')}-${String(Math.min(d,maxD)).padStart(2,'0')}`;
     const inMonth=(d)=>!isCur || d<=lastDay;
     if(inMonth(1)) add(D(1),-1150,'Baufinanzierung Darlehensrate','Darlehen 4711 Rate');
-    if(inMonth(1)) add(D(1),-250,'FNZ Bank Sparplan','Sparplan ETF Depot');
+    if(inMonth(1)) add(D(1),-150,'FNZ Bank Sparplan','Sparplan ETF Depot');
+    if(inMonth(1)) add(D(1), mi<2?-50:mi<4?-75:-60,'FNZ Bank','EREF: 2026'+mi+'77 MREF: FNZ4711 SVWZ: Sparplan Kinderdepot Lena');
+    if(inMonth(1)) add(D(1), mi<3?-50:-25,'FNZ Bank','EREF: 2026'+mi+'78 MREF: FNZ4712 SVWZ: Sparplan Kinderdepot Ben');
     if(inMonth(2)) add(D(2),-98,'Stadtwerke Strom','Abschlag Strom');
     if(inMonth(2)) add(D(2),-135,'Stadtwerke Erdgas','Abschlag Erdgas');
     if(inMonth(3)) add(D(3),-180,'Kita Sonnenschein','Elternbeitrag und Verpflegung');
@@ -521,10 +574,12 @@ function findAnomalies(months){
     // Wiederholt sich das Paar jeden Monat, ist es Absicht (z. B. zwei Verträge) und keine Doppelbuchung
     if(new Set(found.map(f=>f[0].date.slice(0,7))).size>=2) continue;
     found.filter(f=>inP.has(f[1].id)).forEach(f=>dups.push(f)); }
-  const recNames = new Set(detectRecurring(S.tx).filter(r=>r.freq==='monatlich').map(r=>r.key.split('#')[0]));
-  dups.filter(([a])=>!recNames.has(payeeKey(a)) || true).forEach(([a,b])=>{ A.push({sev:'warn',id:'dup-'+b.id,title:'Mögliche Doppelbuchung',text:`${esc(a.payee||a.purpose)}: zweimal ${eur(-a.amount)} am ${fmtDate(a.date)}${a.date!==b.date?' und '+fmtDate(b.date):''}. Falls nur einmal bestellt: beim Händler oder per Lastschrift-Rückgabe zurückholen.`,yearly:0,once:-a.amount,ids:[a.id,b.id]}); });
+  const REC = contracts();
+  const rv = REC.filter(r=>r.needsReview);
+  if(rv.length) A.push({sev:'warn', id:'review-'+rv.map(r=>r.key+r.sig).join(';').length+'-'+rv.length, title:`${rv.length} Vertr${rv.length>1?'äge':'ag'} bitte prüfen`, text:`Bei ${rv.slice(0,3).map(r=>esc(r.name)).join(', ')}${rv.length>3?' …':''} hat sich der Betrag geändert oder es kam länger keine Zahlung. Sag der App kurz, was aktuell gilt, dann stimmen Fixkosten und Analyse.`, yearly:0, goView:'vertraege'});
+  dups.forEach(([a,b])=>{ A.push({sev:'warn',id:'dup-'+b.id,title:'Mögliche Doppelbuchung',text:`${esc(a.payee||a.purpose)}: zweimal ${eur(-a.amount)} am ${fmtDate(a.date)}${a.date!==b.date?' und '+fmtDate(b.date):''}. Falls nur einmal bestellt: beim Händler oder per Lastschrift-Rückgabe zurückholen.`,yearly:0,once:-a.amount,ids:[a.id,b.id]}); });
   // 3 Preiserhöhungen bei Verträgen
-  detectRecurring(S.tx).filter(r=>r.increase>0).forEach(r=>{ A.push({sev:'warn',id:'inc-'+r.key,title:`Preiserhöhung: ${r.name}`,text:`Von ${eur(r.first)} auf ${eur(r.last)} gestiegen (+${eur(r.increase)} ${r.freq}). Prüfen, ob es einen günstigeren Tarif gibt oder ob du ein Sonderkündigungsrecht hast.`,yearly:r.increase*(r.freq==='monatlich'?12:r.freq==='vierteljährlich'?4:2),ids:r.ids}); });
+  REC.filter(r=>r.increase>0).forEach(r=>{ A.push({sev:'warn',id:'inc-'+r.key,title:`Preiserhöhung: ${r.name}`,text:`Von ${eur(r.first)} auf ${eur(r.last)} gestiegen (+${eur(r.increase)} ${r.freq}). Prüfen, ob es einen günstigeren Tarif gibt oder ob du ein Sonderkündigungsrecht hast.`,yearly:r.increase*(r.freq==='monatlich'?12:r.freq==='vierteljährlich'?4:2),ids:r.ids}); });
   // 4 Kategorien über Richtwert
   for(const c of EXP_CATS){ const b=benchFor(c.id); if(!b) continue; const avg=(st.byCat[c.id]||0)/mo; if(avg>b[1]*1.05 && avg-b[1]>=15){ A.push({sev: avg>b[1]*1.4?'warn':'info', id:'over-'+c.id, title:`${c.name} über dem Richtwert`, text:`Ø ${eur0(avg)} pro Monat, üblich für euren Haushalt sind etwa ${eur0(b[0])}–${eur0(b[1])}. Das sind rund ${eur0((avg-b[1])*12)} im Jahr mehr als die Obergrenze.`, yearly:(avg-b[1])*12, cat:c.id}); } }
   // 5 Ausreißer
@@ -534,7 +589,7 @@ function findAnomalies(months){
   const onl = tx.filter(t=>t.amount<0 && t.cat==='online');
   if(onl.length/mo>=6){ const s=onl.reduce((a,t)=>a-t.amount,0); A.push({sev:'info',id:'online',title:'Viele Online-Bestellungen',text:`Ø ${(onl.length/mo).toFixed(1).replace('.',',')} Bestellungen pro Monat (${eur0(s/mo)}). PayPal- und Amazon-Buchungen verstecken oft Abos und Spontankäufe – einmal durchsehen lohnt sich.`,yearly:0,ids:onl.map(t=>t.id)}); }
   // 7 Kleine Abos
-  const rec = detectRecurring(S.tx).filter(r=>r.cat==='abos' || r.cat==='freizeit' || r.cat==='online');
+  const rec = REC.filter(r=>!r.ended && (r.cat==='abos' || r.cat==='freizeit' || r.cat==='online'));
   const small = rec.filter(r=>r.last<=20 && r.freq==='monatlich');
   if(small.length>=3){ const y=small.reduce((a,r)=>a+r.yearly,0); A.push({sev:'info',id:'smallabos',title:`${small.length} kleine Abos summieren sich`,text:`${small.map(r=>r.name).slice(0,5).join(', ')}${small.length>5?' …':''} – zusammen ${eur0(y)} im Jahr. Werden alle noch genutzt?`,yearly:y,ids:small.flatMap(r=>r.ids)}); }
   // 8 Sparquote und Defizitmonate
@@ -619,7 +674,7 @@ function benchRows(st, limit){
 function alertList(A, limit){
   if(!A.length) return `<p class="muted">Keine Auffälligkeiten gefunden. Sauber gewirtschaftet.</p>`;
   const lbl={crit:'Kostenfalle',warn:'Prüfen',info:'Hinweis'};
-  return `<div class="alerts">${A.slice(0,limit||A.length).map(a=>`<div class="alert ${a.sev}"><div class="stripe"></div><div><h3>${esc(a.title)}</h3><p>${a.text}</p><div class="meta"><span class="pill ${a.sev}">${lbl[a.sev]}</span>${a.yearly>1?`<span class="small num">Potenzial ≈ ${eur0(a.yearly)}/Jahr</span>`:''}${a.once?`<span class="small num">${eur(a.once)} einmalig</span>`:''}${a.ids?`<button class="link small" type="button" data-showids="${a.ids.join(',')}">Buchungen ansehen</button>`:''}${a.cat?`<button class="link small" type="button" data-cat="${a.cat}">Buchungen ansehen</button>`:''}<button class="link small" type="button" data-dismiss="${esc(a.id)}" style="color:var(--muted)">Ausblenden</button></div></div></div>`).join('')}</div>`;
+  return `<div class="alerts">${A.slice(0,limit||A.length).map(a=>`<div class="alert ${a.sev}"><div class="stripe"></div><div><h3>${esc(a.title)}</h3><p>${a.text}</p><div class="meta"><span class="pill ${a.sev}">${lbl[a.sev]}</span>${a.yearly>1?`<span class="small num">Potenzial ≈ ${eur0(a.yearly)}/Jahr</span>`:''}${a.once?`<span class="small num">${eur(a.once)} einmalig</span>`:''}${a.ids?`<button class="link small" type="button" data-showids="${a.ids.join(',')}">Buchungen ansehen</button>`:''}${a.cat?`<button class="link small" type="button" data-cat="${a.cat}">Buchungen ansehen</button>`:''}${a.goView?`<button class="link small" type="button" data-view-go="${a.goView}">Jetzt prüfen</button>`:''}<button class="link small" type="button" data-dismiss="${esc(a.id)}" style="color:var(--muted)">Ausblenden</button></div></div></div>`).join('')}</div>`;
 }
 function vUebersicht(){
   const ms=periodMonths(); const st=stats(ms); const A=findAnomalies(ms);
@@ -667,16 +722,59 @@ function vAnalyse(){
     <p class="small muted" style="margin:-4px 0 14px">Das grüne Band zeigt den üblichen Bereich für einen Haushalt eurer Größe. Grundlage sind die Konsumausgaben von Paaren mit Kindern laut Statistischem Bundesamt, auf heutige Preise hochgerechnet. Unter „Mehr“ kannst du die Werte anpassen.</p>
     ${benchRows(st)}</section>`;
 }
+function segText(sg){ return `${eur(sg.amount)} · ${monthSpan(sg.from,sg.to)} (${sg.n}×)`; }
 function vVertraege(){
-  const rec = detectRecurring(S.tx);
-  const total = rec.reduce((s,r)=>s+r.monthly,0);
-  const byCat = {}; rec.forEach(r=>{ (byCat[r.cat]=byCat[r.cat]||[]).push(r); });
+  const rec = contracts();
+  const active = rec.filter(r=>!r.ended), ended = rec.filter(r=>r.ended), review = rec.filter(r=>r.needsReview);
+  const total = active.reduce((s,r)=>s+r.monthly,0);
+  const byCat = {}; active.forEach(r=>{ (byCat[r.cat]=byCat[r.cat]||[]).push(r); });
   const cats = Object.keys(byCat).sort((a,b)=>byCat[b].reduce((s,r)=>s+r.monthly,0)-byCat[a].reduce((s,r)=>s+r.monthly,0));
-  return `<section class="card"><div class="sec-h"><h2>Erkannte Verträge & Abos</h2><span class="small muted">${rec.length} regelmäßige Zahlungen</span></div>
+  const rvCard = r=>{
+    const amts=[...new Set(r.segments.map(x=>x.amount.toFixed(2)))].reverse();
+    const q = r.changed ? 'Der Betrag hat sich geändert. Welcher gilt aktuell?' : `Seit ${fmtDate(r.lastDate)} kam keine Zahlung mehr. Läuft der Vertrag noch?`;
+    return `<div class="rv"><div class="rv-h"><h3>${esc(r.name)}</h3><span class="pill neutral">${esc(CAT[r.cat]?.name||'')}</span></div>
+      ${r.changed?`<div class="hist">${r.segments.map((x,i)=>`<span class="${i===r.segments.length-1?'cur':''}">${segText(x)}</span>`).join('<i>→</i>')}</div>`:''}
+      ${r.maybeEnded && r.changed?`<p class="small muted" style="margin:0">Letzte Zahlung am ${fmtDate(r.lastDate)}.</p>`:''}
+      <p class="q">${q}</p>
+      <div class="rv-o">${amts.map((a,i)=>`<button class="btn ${i===0?'':'soft'} small" type="button" data-rv="${esc(r.key)}" data-amt="${a}">${i===0&&r.changed?'Aktuell: ':''}${eur(+a)}${!r.changed?' – läuft weiter':''}</button>`).join('')}
+      <button class="btn soft small" type="button" data-ctr="${esc(r.key)}">Anderer Betrag …</button>
+      <button class="btn soft small" type="button" data-rv="${esc(r.key)}" data-end="1">Beendet</button></div></div>`;
+  };
+  const row = r=>`<button class="ctr" type="button" data-ctr="${esc(r.key)}"><span class="n">${esc(r.name)}${r.needsReview?' <span class="pill warn">prüfen</span>':''}</span><span class="num">${eur(r.last)}</span><span class="d"><span>${r.freq}</span><span>zuletzt ${fmtDate(r.lastDate)}</span>${r.freq!=='monatlich'?`<span class="num">≈ ${eur(r.monthly)}/Monat</span>`:''}${r.changed&&!r.needsReview?`<span>vorher ${eur(r.first)}</span>`:''}${r.increase>0?`<span class="pill warn">+${eur(r.increase)} teurer</span>`:''}${r.merged.length?`<span>${r.merged.length+1} zusammengeführt</span>`:''}</span></button>`;
+  return `${review.length?`<section class="card"><div class="sec-h"><h2>Bitte prüfen</h2><span class="small muted">${review.length} offen</span></div><p class="small muted" style="margin:-4px 0 12px">Damit die Fixkosten stimmen, sag kurz, welcher Betrag jetzt gilt. Die App merkt sich deine Antwort und fragt erst wieder, wenn sich etwas ändert.</p><div class="stack">${review.map(rvCard).join('')}</div></section>`:''}
+  <section class="card"><div class="sec-h"><h2>Erkannte Verträge & Abos</h2><span class="small muted">${active.length} laufend</span></div>
     <div class="sumline"><span>Fixkosten pro Monat</span><span class="num"><b>${eur(total)}</b> · ${eur0(total*12)} im Jahr</span></div>
-    <p class="small muted" style="margin:0 0 6px">Erkannt werden Zahlungen, die mit ähnlichem Betrag monatlich, vierteljährlich oder halbjährlich wiederkehren. Jährliche Verträge tauchen erst nach 12 Monaten Daten auf.</p>
-    ${cats.map(cid=>`<div class="dayh">${esc(CAT[cid]?.name||cid)} · <span class="num">${eur(byCat[cid].reduce((s,r)=>s+r.monthly,0))}/Monat</span></div>${byCat[cid].map(r=>`<div class="ctr"><span class="n">${esc(r.name)}</span><span class="num">${eur(r.last)}</span><span class="d"><span>${r.freq}</span><span>zuletzt ${fmtDate(r.lastDate)}</span>${r.freq!=='monatlich'?`<span class="num">≈ ${eur(r.monthly)}/Monat</span>`:''}${r.increase>0?`<span class="pill warn">+${eur(r.increase)} teurer</span>`:''}<button class="link small" type="button" data-showids="${r.ids.join(',')}">Buchungen</button></span></div>`).join('')}`).join('') || '<div class="empty">Noch keine wiederkehrenden Zahlungen erkannt. Dafür braucht es mindestens 3 Monate Daten.</div>'}
-  </section>`;
+    <p class="small muted" style="margin:0 0 6px">Antippen zum Bearbeiten: Name, aktueller Betrag, beendet oder mit einem anderen Eintrag zusammenführen. Jährliche Verträge tauchen erst nach 12 Monaten Daten auf.</p>
+    ${cats.map(cid=>`<div class="dayh">${esc(CAT[cid]?.name||cid)} · <span class="num">${eur(byCat[cid].reduce((s,r)=>s+r.monthly,0))}/Monat</span></div>${byCat[cid].map(row).join('')}`).join('') || '<div class="empty">Noch keine wiederkehrenden Zahlungen erkannt. Dafür braucht es mindestens 3 Monate Daten.</div>'}
+  </section>
+  ${ended.length?`<section class="card"><div class="sec-h"><h2>Beendet</h2><span class="small muted">zählen nicht mehr mit</span></div>${ended.map(row).join('')}</section>`:''}`;
+}
+function contractSheet(key){
+  const all=contracts(); const r=all.find(x=>x.key===key); if(!r) return;
+  const cfg=S.contracts[key]||{};
+  const others=all.filter(x=>x.key!==key).sort((a,b)=>(a.cat===r.cat?0:1)-(b.cat===r.cat?0:1) || a.name.localeCompare(b.name));
+  openSheet(`<h2>Vertrag bearbeiten</h2>
+    <label class="f">Name<input id="kName" value="${esc(r.name)}"></label>
+    <div class="grid2"><label class="f">Aktueller Betrag (${r.freq})<input id="kAmt" inputmode="decimal" value="${String(r.last).replace('.',',')}"></label>
+    <label class="f">Status<select id="kEnd"><option value="0" ${r.ended?'':'selected'}>läuft</option><option value="1" ${r.ended?'selected':''}>beendet</option></select></label></div>
+    <div class="small"><b>Verlauf</b><div class="hist" style="margin-top:6px">${r.segments.map((x,i)=>`<span class="${i===r.segments.length-1?'cur':''}">${segText(x)}</span>`).join('<i>→</i>')}</div></div>
+    <label class="f">Gehört zu einem anderen Vertrag?<select id="kMerge"><option value="">Nein, eigener Vertrag</option>${others.map(o=>`<option value="${esc(o.key)}">${esc(o.name)} · ${eur(o.latest)}</option>`).join('')}</select></label>
+    ${r.merged.length?`<div class="small muted">Hierhin zusammengeführt: ${r.merged.length} weitere${r.merged.length>1?'':'r'} Eintrag. <button class="link small" type="button" id="kSplit">Wieder trennen</button></div>`:''}
+    <div class="actions"><button class="btn soft" type="button" id="kBuch">Buchungen ansehen</button><span style="display:flex;gap:8px"><button class="btn soft" type="button" id="kCancel">Abbrechen</button><button class="btn" type="button" id="kSave">Speichern</button></span></div>
+    ${S.contracts[key]?`<button class="link small" type="button" id="kReset" style="align-self:flex-start;color:var(--muted)">Eigene Angaben zurücksetzen</button>`:''}`, el=>{
+      el.querySelector('#kCancel').onclick=()=>closeSheet();
+      el.querySelector('#kBuch').onclick=()=>closeSheet(()=>go({view:'buchungen', ids:r.ids, fromView:'vertraege'}));
+      const rs=el.querySelector('#kReset'); if(rs) rs.onclick=()=>{ delete S.contracts[key]; save(); closeSheet(()=>render()); toast('Zurückgesetzt'); };
+      const sp=el.querySelector('#kSplit'); if(sp) sp.onclick=()=>{ r.merged.forEach(k=>{ if(S.contracts[k]) delete S.contracts[k].mergeInto; }); save(); closeSheet(()=>render()); toast('Getrennt'); };
+      el.querySelector('#kSave').onclick=()=>{
+        const amt=parseAmount(el.querySelector('#kAmt').value); if(isNaN(amt)||amt<0){ toast('Bitte einen gültigen Betrag eingeben.'); return; }
+        const m=el.querySelector('#kMerge').value;
+        if(m){ S.contracts[key]=Object.assign({},cfg,{mergeInto:m}); save(); closeSheet(()=>render()); toast('Zusammengeführt – bitte beim Ziel kurz den aktuellen Betrag bestätigen'); return; }
+        const nm=el.querySelector('#kName').value.trim();
+        S.contracts[key]=Object.assign({},cfg,{amount:Math.abs(amt), ended:el.querySelector('#kEnd').value==='1', sig:r.sig, name: nm && nm!==r.name ? nm : (cfg.name||'')});
+        save(); closeSheet(()=>render()); toast('Gespeichert');
+      };
+    });
 }
 function vMehr(){
   const rules = S.rules.map((r,i)=>`<div class="ctr"><span class="n">„${esc(r.label||r.key)}“</span><span class="small">${esc(CAT[r.cat]?.name)}</span><span class="d"><button class="link small" type="button" data-delrule="${i}">Regel löschen</button></span></div>`).join('');
@@ -806,6 +904,8 @@ document.addEventListener('click', e=>{
   if(t.dataset.viewGo){ go({view:t.dataset.viewGo, fromView:view}); return; }
   if(t.dataset.cat){ go({view:'buchungen', catFilter:t.dataset.cat, fromView:view}); return; }
   if(t.dataset.showids){ go({view:'buchungen', ids:t.dataset.showids.split(','), fromView:view}); return; }
+  if(t.dataset.rv){ const k=t.dataset.rv; const r=contracts().find(x=>x.key===k); if(r){ S.contracts[k]=Object.assign({},S.contracts[k],{sig:r.sig, ended:!!t.dataset.end, amount: t.dataset.end? r.latest : +t.dataset.amt}); save(); render(); toast(t.dataset.end?`„${r.name}“ als beendet markiert`:`Gespeichert: ${eur(+t.dataset.amt)} gilt aktuell`);} return; }
+  if(t.dataset.ctr){ contractSheet(t.dataset.ctr); return; }
   if(t.dataset.edit){ const tx=S.tx.find(x=>x.id===t.dataset.edit); tx && editSheet(tx); return; }
   if(t.dataset.dismiss){ S.dismissed.push(t.dataset.dismiss); save(); render(); toast('Hinweis ausgeblendet'); return; }
   if(t.dataset.delrule){ S.rules.splice(+t.dataset.delrule,1); save(); render(); return; }
