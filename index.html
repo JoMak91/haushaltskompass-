@@ -149,6 +149,10 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border
 table{border-collapse:collapse;font-size:.78rem;width:100%}
 th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
 th{background:var(--sunk);font-weight:600}
+.backbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.backbar .ttl{flex:1 1 160px;min-width:0;font-family:var(--f-display);font-weight:600;font-size:1.08rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.backbtn{font:inherit;font-weight:600;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:999px;padding:7px 14px 7px 10px;min-height:38px;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.backbtn:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(140px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:999px;font-size:.88rem;z-index:60;max-width:calc(100% - 32px);text-align:center}
 .stack{display:flex;flex-direction:column;gap:10px}
 .score{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
@@ -380,7 +384,25 @@ function detectRecurring(tx){
 const KEY='haushaltskompass_v1';
 const uid = ()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
 let S = load();
-let view = 'uebersicht', period = 'all', search='', catFilter='', toastT=null;
+let view = 'uebersicht', period = 'all', search='', catFilter='', toastT=null, fromView=null;
+const VIEW_NAMES={uebersicht:'Übersicht',buchungen:'Buchungen',analyse:'Analyse',vertraege:'Verträge',mehr:'Mehr'};
+/* Jede Ansicht ist ein Eintrag im Browser-Verlauf: der Zurück-Button in der App und die Zurück-Taste des Handys springen zur vorherigen Ansicht */
+function navState(){ return {nav:1, view, catFilter, ids:window.__ids||null, period, search, fromView, y:window.scrollY}; }
+function applyState(st){ view=st.view||'uebersicht'; catFilter=st.catFilter||''; window.__ids=st.ids||null; period=st.period||'all'; search=st.search||''; fromView=st.fromView||null; }
+function go(changes){
+  try{ history.replaceState(navState(),''); }catch(e){}
+  applyState(Object.assign(navState(), {catFilter:'', ids:null, search:'', fromView:null}, changes));
+  try{ history.pushState(navState(),''); }catch(e){}
+  render(); window.scrollTo(0,0);
+}
+function goBack(){ if(history.state && history.state.nav && history.length>1 && fromView){ history.back(); } else { go({view: fromView||'uebersicht'}); } }
+let ignorePop=false, afterPop=null;
+window.addEventListener('popstate', e=>{
+  if(ignorePop){ ignorePop=false; const f=afterPop; afterPop=null; f&&f(); return; }
+  if(document.querySelector('.scrim')){ document.querySelectorAll('.scrim').forEach(x=>x.remove()); return; }
+  const st=e.state; if(!st || !st.nav){ applyState({}); render(); return; }
+  applyState(st); render(); requestAnimationFrame(()=>window.scrollTo(0, st.y||0));
+});
 function defaultState(){ return {tx:[], rules:[], bench:{}, adults:2, kids:2, sample:false, dismissed:[]}; }
 function load(){
   try{ const raw = localStorage.getItem(KEY); if(raw){ const d=JSON.parse(raw); return Object.assign(defaultState(), d); } }catch(e){}
@@ -621,12 +643,14 @@ function vBuchungen(){
     const c=CAT[t.cat]||CAT.sonstiges;
     body+=`<button class="row" type="button" data-edit="${t.id}"><span class="ic" style="background:${c.color}">${initials(c.id)}</span><span class="t"><span class="p">${esc(t.payee||t.purpose||'Ohne Bezeichnung')}</span><span class="s">${esc(c.name)}${t.manual?' · manuell':''}${t.purpose&&t.payee?' · '+esc(t.purpose):''}</span></span><span class="a num ${t.amount>0?'pos':''}">${t.amount>0?'+':''}${eur(t.amount)}</span></button>`;
   }
-  return `<section class="card"><div class="toolbar"><input type="search" id="q" placeholder="Suchen: Händler, Zweck, Betrag" value="${esc(search)}" aria-label="Buchungen durchsuchen"><select id="catSel" aria-label="Nach Rubrik filtern">${opts}</select></div>
-  ${window.__ids?`<div class="banner" style="margin-top:10px"><div class="grow">Gefiltert auf Buchungen aus einer Auffälligkeit.</div><button class="btn soft small" type="button" data-act="clearIds">Filter aufheben</button></div>`:''}
+  const drill = catFilter ? (CAT[catFilter]?.name||'Rubrik') : (window.__ids ? 'Buchungen zur Auffälligkeit' : '');
+  const backbar = (drill || fromView) ? `<div class="backbar"><button class="backbtn" type="button" data-act="back" aria-label="Zurück">‹ ${esc(VIEW_NAMES[fromView]||'Zurück')}</button><span class="ttl">${esc(drill||'Alle Buchungen')}</span>${drill?`<button class="link small" type="button" data-act="allTx">Alle Buchungen</button>`:''}</div>` : '';
+  return `${backbar}<section class="card"><div class="toolbar"><input type="search" id="q" placeholder="Suchen: Händler, Zweck, Betrag" value="${esc(search)}" aria-label="Buchungen durchsuchen"><select id="catSel" aria-label="Nach Rubrik filtern">${opts}</select></div>
   <div class="sumline small" style="margin-top:12px"><span>${tx.length} Buchungen</span><span class="num">Summe ${eur(sum)}</span></div>
   <div class="list">${body || '<div class="empty">Keine Buchungen gefunden.</div>'}</div></section>`;
 }
 function vAnalyse(){
+  const back = fromView ? `<div class="backbar"><button class="backbtn" type="button" data-act="back">‹ ${esc(VIEW_NAMES[fromView])}</button></div>` : '';
   const ms=periodMonths(); const st=stats(ms); const A=findAnomalies(ms);
   const rated = EXP_CATS.filter(c=>benchFor(c.id)); let over=0, ok=0;
   rated.forEach(c=>{ const avg=(st.byCat[c.id]||0)/st.n; const b=benchFor(c.id); if(avg>b[1]*1.05) over++; else ok++; });
@@ -636,7 +660,7 @@ function vAnalyse(){
   else if(over<=3 && rate>=0){ verdict='Überwiegend normal, einzelne Ausreißer'; vcls='warn'; }
   else { verdict='Deutlich über üblichen Werten'; vcls='crit'; }
   const hh = `${S.adults} Erwachsene${S.kids?`, ${S.kids} Kind${S.kids>1?'er':''}`:''}`;
-  return `<section class="card"><div class="sec-h"><h2>Ist das normal für euren Haushalt?</h2><span class="small muted">${hh}</span></div>
+  return `${back}<section class="card"><div class="sec-h"><h2>Ist das normal für euren Haushalt?</h2><span class="small muted">${hh}</span></div>
     <div class="score"><div class="big" style="color:var(--${vcls})">${ok}/${rated.length}</div><div><div style="font-weight:600">${verdict}</div><div class="small muted">${ok} von ${rated.length} vergleichbaren Rubriken liegen im üblichen Rahmen, Sparquote ${(rate*100).toFixed(1).replace('.',',')} %.</div></div></div></section>
   <section class="card"><div class="sec-h"><h2>Auffälligkeiten & Kostenfallen</h2><span class="small muted">${A.length} gefunden</span></div>${alertList(A)}</section>
   <section class="card"><div class="sec-h"><h2>Rubriken im Vergleich</h2><span class="small muted">Ø pro Monat</span></div>
@@ -672,13 +696,20 @@ function vMehr(){
 
 /* ---------- Sheets ---------- */
 function openSheet(html, onMount){
-  closeSheet();
+  const had=document.querySelector('.scrim');
+  document.querySelectorAll('.scrim').forEach(s=>s.remove());
+  if(!had){ try{ history.pushState(Object.assign(navState(),{sheet:1}),''); }catch(e){} }
   const sc=document.createElement('div'); sc.className='scrim'; sc.innerHTML=`<div class="sheet" role="dialog" aria-modal="true">${html}</div>`;
   sc.addEventListener('click',e=>{ if(e.target===sc) closeSheet(); });
   document.body.appendChild(sc); onMount && onMount(sc.firstChild);
   const f=sc.querySelector('input,select,button'); f && f.focus({preventScroll:true});
 }
-function closeSheet(){ document.querySelectorAll('.scrim').forEach(s=>s.remove()); }
+function closeSheet(then){
+  const open=!!document.querySelector('.scrim');
+  document.querySelectorAll('.scrim').forEach(s=>s.remove());
+  if(open && history.state && history.state.sheet){ ignorePop=true; afterPop=(typeof then==='function')?then:null; history.back(); }
+  else if(typeof then==='function') then();
+}
 document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeSheet(); });
 function catOptions(sel, incomeSide){
   const pool = incomeSide==null ? CATS : CATS.filter(c=> incomeSide ? (c.income||c.transfer) : !c.income);
@@ -699,8 +730,8 @@ function editSheet(t){
       const sOut=el.querySelector('#sOut'), sIn=el.querySelector('#sIn');
       const setSide=v=>{ income=v; sOut.setAttribute('aria-pressed',!v); sIn.setAttribute('aria-pressed',v); const sel=el.querySelector('#eCat'); const cur=sel.value; if(!!CAT[cur].income!==v && !CAT[cur].transfer) sel.value = v?'sonst_ein':'sonstiges'; };
       sOut.onclick=()=>setSide(false); sIn.onclick=()=>setSide(true);
-      el.querySelector('#eCancel').onclick=closeSheet;
-      const del=el.querySelector('#eDel'); if(del) del.onclick=()=>{ if(del.dataset.armed){ S.tx=S.tx.filter(x=>x.id!==t.id); save(); closeSheet(); render(); toast('Buchung gelöscht'); } else { del.dataset.armed=1; del.textContent='Wirklich löschen?'; } };
+      el.querySelector('#eCancel').onclick=()=>closeSheet();
+      const del=el.querySelector('#eDel'); if(del) del.onclick=()=>{ if(del.dataset.armed){ S.tx=S.tx.filter(x=>x.id!==t.id); save(); closeSheet(()=>{ render(); toast('Buchung gelöscht'); }); } else { del.dataset.armed=1; del.textContent='Wirklich löschen?'; } };
       el.querySelector('#eSave').onclick=()=>{
         const a=parseAmount(el.querySelector('#eAmt').value); if(isNaN(a)||a===0){ toast('Bitte einen Betrag eingeben.'); el.querySelector('#eAmt').focus(); return; }
         const d=el.querySelector('#eDate').value; if(!d){ toast('Bitte ein Datum wählen.'); return; }
@@ -711,7 +742,7 @@ function editSheet(t){
         const rule=el.querySelector('#eRule');
         if(rule && rule.checked){ const key=payeeKey(t); S.rules=S.rules.filter(r=>r.key!==key); S.rules.push({key, cat:t.cat, label:(t.payee||t.purpose).slice(0,40)}); let n=0; S.tx.forEach(x=>{ if(payeeKey(x)===key && (!!CAT[t.cat].income===(x.amount>0) || CAT[t.cat].transfer)){ if(x.cat!==t.cat) n++; x.cat=t.cat; } }); toast(`Gemerkt – ${n} weitere Buchung(en) umsortiert`); }
         else toast(isNew?'Eintrag gespeichert':'Gespeichert');
-        save(); closeSheet(); render();
+        save(); closeSheet(()=>render());
       };
     });
 }
@@ -731,7 +762,7 @@ function importStart(){
     <p class="small muted" style="margin:0">Nur PDF-Kontoauszüge? Schick sie Claude im Chat – er wandelt sie in eine CSV für diese App um.</p>
     <div class="actions"><span></span><button class="btn soft" type="button" id="iCancel">Abbrechen</button></div>`, el=>{
       el.querySelector('#pickFile').onclick=()=>document.getElementById('fileIn').click();
-      el.querySelector('#iCancel').onclick=closeSheet;
+      el.querySelector('#iCancel').onclick=()=>closeSheet();
       el.querySelector('#usePaste').onclick=()=>{ const v=el.querySelector('#pasteTxt').value; if(v.trim()) importSheet(v,'Eingefügter Text'); };
     });
 }
@@ -754,7 +785,7 @@ function importSheet(text, name){
         if(S.sample){ S.tx=S.tx.filter(t=>!t.sample); S.sample=false; }
         const have=new Set(S.tx.map(txFingerprint)); let added=0, dup=0;
         for(const t of tx){ const fp=txFingerprint(t); if(have.has(fp)){dup++; continue;} have.add(fp); S.tx.push({...t, id:uid(), cat:categorize(t,S.rules)}); added++; }
-        save(); closeSheet(); period='all'; view='uebersicht'; render();
+        save(); closeSheet(()=>go({view:'uebersicht', period:'all'}));
         toast(`${added} Buchungen importiert${dup?`, ${dup} waren schon vorhanden`:''}`);
       };
     });
@@ -770,11 +801,11 @@ function restoreJSON(txt){
 /* ---------- Events ---------- */
 document.addEventListener('click', e=>{
   const t=e.target.closest('button, g[data-period]'); if(!t) return;
-  if(t.classList.contains('tab')){ view=t.dataset.view; window.__ids=null; render(); window.scrollTo(0,0); return; }
+  if(t.classList.contains('tab')){ if(t.dataset.view===view && !catFilter && !window.__ids && !fromView){ window.scrollTo({top:0,behavior:'smooth'}); return; } go({view:t.dataset.view}); return; }
   if(t.dataset.period){ period = (period===t.dataset.period && t.tagName==='g') ? 'all' : t.dataset.period; render(); return; }
-  if(t.dataset.viewGo){ view=t.dataset.viewGo; render(); window.scrollTo(0,0); return; }
-  if(t.dataset.cat){ catFilter=t.dataset.cat; window.__ids=null; search=''; view='buchungen'; render(); window.scrollTo(0,0); return; }
-  if(t.dataset.showids){ window.__ids=t.dataset.showids.split(','); search=''; catFilter=''; view='buchungen'; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.viewGo){ go({view:t.dataset.viewGo, fromView:view}); return; }
+  if(t.dataset.cat){ go({view:'buchungen', catFilter:t.dataset.cat, fromView:view}); return; }
+  if(t.dataset.showids){ go({view:'buchungen', ids:t.dataset.showids.split(','), fromView:view}); return; }
   if(t.dataset.edit){ const tx=S.tx.find(x=>x.id===t.dataset.edit); tx && editSheet(tx); return; }
   if(t.dataset.dismiss){ S.dismissed.push(t.dataset.dismiss); save(); render(); toast('Hinweis ausgeblendet'); return; }
   if(t.dataset.delrule){ S.rules.splice(+t.dataset.delrule,1); save(); render(); return; }
@@ -782,7 +813,8 @@ document.addEventListener('click', e=>{
   if(act==='import') importStart();
   else if(act==='add') editSheet(null);
   else if(act==='clearSample'){ S.tx=S.tx.filter(x=>!x.sample); S.sample=false; save(); render(); toast('Beispieldaten entfernt'); }
-  else if(act==='clearIds'){ window.__ids=null; render(); }
+  else if(act==='back') goBack();
+  else if(act==='allTx'){ catFilter=''; window.__ids=null; search=''; try{history.replaceState(navState(),'');}catch(e){} render(); }
   else if(act==='backup'){ try{ const b=new Blob([backupJSON()],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='haushaltskompass-sicherung-'+new Date().toISOString().slice(0,10)+'.json'; document.body.appendChild(a); a.click(); a.remove(); toast('Sicherung wird gespeichert. Klappt das nicht, nutze „Sicherung kopieren“.'); }catch(err){ toast('Download hier nicht möglich – nutze „Sicherung kopieren“.'); } }
   else if(act==='backupCopy'){ const txt=backupJSON(); navigator.clipboard?.writeText(txt).then(()=>toast('Sicherung in die Zwischenablage kopiert')).catch(()=>{ openSheet(`<h2>Sicherung</h2><p class="small muted">Text markieren und kopieren, z. B. in eine Notiz.</p><textarea readonly id="bk">${esc(txt)}</textarea><div class="actions"><span></span><button class="btn" type="button" onclick="closeSheet()">Fertig</button></div>`, el=>{ const ta=el.querySelector('#bk'); ta.focus(); ta.select(); }); }); }
   else if(act==='restore'){ openSheet(`<h2>Sicherung laden</h2><p class="small muted" style="margin:0">Ersetzt alle aktuellen Daten.</p><button class="btn" type="button" id="rFile">Datei auswählen</button><textarea id="rTxt" placeholder="Oder kopierten Sicherungstext einfügen"></textarea><div class="actions"><button class="btn soft" type="button" onclick="closeSheet()">Abbrechen</button><button class="btn" type="button" id="rGo">Text laden</button></div>`, el=>{ el.querySelector('#rFile').onclick=()=>document.getElementById('backupIn').click(); el.querySelector('#rGo').onclick=()=>restoreJSON(el.querySelector('#rTxt').value); }); }
@@ -795,7 +827,7 @@ document.addEventListener('input', e=>{
 });
 document.addEventListener('change', e=>{
   const t=e.target;
-  if(t.id==='catSel'){ catFilter=t.value; window.__ids=null; render(); }
+  if(t.id==='catSel'){ catFilter=t.value; window.__ids=null; try{history.replaceState(navState(),'');}catch(e){} render(); }
   if(t.id==='adults'||t.id==='kids'){ S[t.id]=Math.max(t.id==='adults'?1:0, parseInt(t.value)||0); save(); toast('Haushaltsgröße gespeichert'); }
   if(t.dataset.bench){ const id=t.dataset.bench; const b=[...(S.bench[id]||CAT[id].bench)]; b[+t.dataset.i]=Math.max(0,+t.value||0); S.bench[id]=b; save(); }
 });
@@ -803,6 +835,7 @@ document.getElementById('fab').onclick=()=>editSheet(null);
 document.getElementById('btnImportTop').onclick=importStart;
 document.getElementById('fileIn').onchange=e=>{ const f=e.target.files[0]; if(f) readFile(f); e.target.value=''; };
 document.getElementById('backupIn').onchange=e=>{ const f=e.target.files[0]; if(!f) return; const r=new FileReader(); r.onload=()=>restoreJSON(r.result); r.readAsText(f); e.target.value=''; };
+try{ history.replaceState(navState(),''); }catch(e){}
 render();
 </script>
 <script>if("serviceWorker" in navigator){window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));}</script>
